@@ -1,0 +1,238 @@
+--[[
+STABLE PART CONTROLLER V18.0 - PERSISTENT & FORCEFUL
+SEQUÊNCIA: LEVITAR (2 STUDS) -> VERDE -> SEGUIR (FORCADO)
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- Configurações Globais
+getgenv().CurrentPart = nil
+getgenv().ActiveGui = nil
+getgenv().LockedY = 0
+getgenv().YSpeed = getgenv().YSpeed or 0.5
+getgenv().TargetWalkspeed = getgenv().TargetWalkspeed or nil
+getgenv().SelectionActive = false
+
+-- [ LIMPEZA ]
+local function Cleanup()
+    if getgenv().ActiveGui then getgenv().ActiveGui:Destroy() end
+    if getgenv().CurrentPart then
+        local p = getgenv().CurrentPart
+        pcall(function()
+            if p:FindFirstChild("SelectionHighlight") then p.SelectionHighlight:Destroy() end
+            for _, obj in pairs(p:GetChildren()) do
+                if obj.Name == "ControlPos" or obj.Name == "ControlGyro" then
+                    obj:Destroy()
+                end
+            end
+        end)
+    end
+    getgenv().CurrentPart = nil
+end
+
+-- [ LOOP DE WALKSPEED ]
+task.spawn(function()
+    while task.wait(0.3) do
+        pcall(function()
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                if getgenv().TargetWalkspeed and getgenv().TargetWalkspeed ~= "" then
+                    local num = tonumber(getgenv().TargetWalkspeed)
+                    if num then LocalPlayer.Character.Humanoid.WalkSpeed = num end
+                end
+            end
+        end)
+    end
+end)
+
+-- [ LÓGICA DE PERSISTÊNCIA ]
+local function ApplyForce(part)
+    if not part:FindFirstChild("ControlPos") then
+        local bp = Instance.new("BodyPosition", part)
+        bp.Name = "ControlPos"
+        bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bp.P = 200000 -- Aumentado para mais força
+        bp.D = 500    -- Amortecimento para não tremer
+        bp.Position = part.Position
+    end
+    
+    if not part:FindFirstChild("ControlGyro") then
+        local bg = Instance.new("BodyGyro", part)
+        bg.Name = "ControlGyro"
+        bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        bg.P = 500000
+        bg.CFrame = part.CFrame
+    end
+end
+
+-- [ LÓGICA DE CONTROLE ]
+function CreateControlGUI(part)
+    Cleanup()
+    if not part or part.Anchored then return end
+
+    getgenv().CurrentPart = part  
+    
+    -- Reivindicar Network Ownership constantemente
+    task.spawn(function()
+        while getgenv().CurrentPart == part do
+            if part and part.Parent then
+                -- Força a rede a aceitar que você move a parte
+                settings().Physics.AllowSleep = false
+                if part.ReceiveAge > 0 then -- Checa se há lag na rede
+                    part.Velocity = Vector3.new(0, 0.1, 0) -- Pequeno impulso para acordar a física
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+
+    -- 1. EFEITO VISUAL INICIAL
+    local hl = Instance.new("Highlight", part)  
+    hl.Name = "SelectionHighlight"  
+    hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+    hl.FillColor = Color3.fromRGB(255, 0, 0)
+    hl.FillTransparency = 0.8
+
+    ApplyForce(part)
+    part.ControlPos.Position = part.Position + Vector3.new(0, 2, 0)
+
+    task.wait(0.2)
+    hl.OutlineColor = Color3.fromRGB(0, 255, 150)
+    hl.FillColor = Color3.fromRGB(0, 255, 150)
+    
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")  
+    if hrp then getgenv().LockedY = hrp.Position.Y - 3 end  
+
+    -- [ GUI ]
+    local sg = Instance.new("ScreenGui", LocalPlayer.PlayerGui)  
+    sg.Name = "PartControlUI"  
+    getgenv().ActiveGui = sg  
+
+    local MainFrame = Instance.new("Frame", sg)  
+    MainFrame.Size = UDim2.new(0, 200, 0, 180)  
+    MainFrame.Position = UDim2.new(1, -210, 0.5, -90)   
+    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)  
+    Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)  
+    Instance.new("UIStroke", MainFrame).Color = Color3.fromRGB(0, 255, 150)
+
+    local UIList = Instance.new("UIListLayout", MainFrame)  
+    UIList.Padding = UDim.new(0, 8)  
+    UIList.HorizontalAlignment = Enum.HorizontalAlignment.Center  
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder  
+    Instance.new("UIPadding", MainFrame).PaddingTop = UDim.new(0, 10)
+
+    local function CreateInput(placeholder, text, order)  
+        local box = Instance.new("TextBox", MainFrame)  
+        box.Size = UDim2.new(0.85, 0, 0, 32)  
+        box.BackgroundColor3 = Color3.fromRGB(35, 35, 35)  
+        box.PlaceholderText = placeholder  
+        box.Text = text or ""  
+        box.TextColor3 = Color3.new(1,1,1)  
+        box.Font = Enum.Font.Code  
+        box.LayoutOrder = order  
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)  
+        return box  
+    end  
+
+    local YSpeedInput = CreateInput("Y Speed", tostring(getgenv().YSpeed), 1)  
+    local WSInput = CreateInput("Walkspeed", getgenv().TargetWalkspeed or "", 2)  
+    local PartInput = CreateInput("X, Y, Z", "", 3)  
+
+    YSpeedInput.FocusLost:Connect(function() getgenv().YSpeed = tonumber(YSpeedInput.Text) or 0.5 end)
+    WSInput.FocusLost:Connect(function() getgenv().TargetWalkspeed = WSInput.Text end)
+
+    local function CreateArrow(txt, yOffset, multiplier)  
+        local btn = Instance.new("TextButton", sg)  
+        btn.Size = UDim2.new(0, 40, 0, 40)  
+        btn.Position = UDim2.new(1, -255, 0.5, yOffset)  
+        btn.Text = txt  
+        btn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)  
+        btn.TextColor3 = Color3.fromRGB(0, 255, 150)  
+        btn.Font = Enum.Font.Code  
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)  
+        Instance.new("UIStroke", btn).Color = Color3.fromRGB(0, 255, 150)  
+
+        local pressing = false  
+        btn.MouseButton1Down:Connect(function() pressing = true end)  
+        btn.MouseButton1Up:Connect(function() pressing = false end)  
+      
+        RunService.Heartbeat:Connect(function()  
+            if pressing and getgenv().CurrentPart == part then  
+                getgenv().LockedY = getgenv().LockedY + (getgenv().YSpeed * multiplier)  
+            end  
+        end)  
+    end  
+
+    CreateArrow("▲", -45, 1)  
+    CreateArrow("▼", 5, -1)  
+
+    -- [ LOOP DE FÍSICA E PERSISTÊNCIA ]
+    RunService.Heartbeat:Connect(function()  
+        if getgenv().CurrentPart ~= part or not part.Parent then return end  
+        
+        -- Garante que as forças ainda existem (Persistência)
+        ApplyForce(part)
+        
+        -- Anti-Giro e Anti-Fling
+        part.RotVelocity = Vector3.new(0, 0, 0)
+        part.Velocity = Vector3.new(0, 0.1, 0) 
+        
+        if part:FindFirstChild("ControlGyro") then
+            part.ControlGyro.CFrame = CFrame.new(part.Position) * CFrame.Angles(0, 0, 0)
+        end
+
+        local h = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")  
+        if h and part:FindFirstChild("ControlPos") then
+            part.ControlPos.Position = Vector3.new(h.Position.X, getgenv().LockedY, h.Position.Z)  
+            
+            if not PartInput:IsFocused() then  
+                PartInput.Text = string.format("%.1f, %.1f, %.1f", part.Position.X, part.Position.Y, part.Position.Z)  
+            end  
+        end  
+    end)
+end
+
+-- [ BOTÃO DE SELEÇÃO ]
+local function SetupToggle()
+    if LocalPlayer.PlayerGui:FindFirstChild("ControlToggleButton") then
+        LocalPlayer.PlayerGui.ControlToggleButton:Destroy()
+    end
+    local ToggleGui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)  
+    ToggleGui.Name = "ControlToggleButton"  
+    ToggleGui.ResetOnSpawn = false   
+    local RoundBtn = Instance.new("TextButton", ToggleGui)  
+    RoundBtn.Name = "MainButton"  
+    RoundBtn.Size = UDim2.new(0, 45, 0, 45)  
+    RoundBtn.Position = UDim2.new(1, -55, 0, 10)  
+    RoundBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)  
+    RoundBtn.Text = "SEL"  
+    RoundBtn.TextColor3 = Color3.new(1,1,1)  
+    RoundBtn.Font = Enum.Font.Code  
+    Instance.new("UICorner", RoundBtn).CornerRadius = UDim.new(1, 0)  
+    local RoundStroke = Instance.new("UIStroke", RoundBtn)  
+    RoundStroke.Color = Color3.fromRGB(200, 0, 0)  
+    RoundStroke.Thickness = 2  
+    RoundBtn.MouseButton1Click:Connect(function()  
+        getgenv().SelectionActive = not getgenv().SelectionActive  
+        RoundStroke.Color = getgenv().SelectionActive and Color3.fromRGB(0, 255, 150) or Color3.fromRGB(200, 0, 0)  
+    end)
+end
+
+Mouse.Button1Down:Connect(function()
+    if getgenv().SelectionActive and Mouse.Target then
+        CreateControlGUI(Mouse.Target)
+        getgenv().SelectionActive = false
+        pcall(function()
+            LocalPlayer.PlayerGui.ControlToggleButton.MainButton.UIStroke.Color = Color3.fromRGB(200, 0, 0)
+        end)
+    end
+end)
+
+SetupToggle()
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    SetupToggle()
+    Cleanup()
+end)
